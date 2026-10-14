@@ -31,39 +31,72 @@
   //   eN   N columns of ground, with a patrolling slime enemy
   //   rN   N columns of ground, with a spiked wheel that rolls toward the ball
   //   dH   1 column of ground, with a spike mine floating H tiles up that flies toward the ball
+  //   t    1 column of ground with a Triple Shot weapon pickup
+  //   m    1 column of ground with a Bomb Launcher weapon pickup
   //   BV   boss (V = 1 King Blob, 2 Spike Lord) - beat it to clear the level
   //   S    player start (on ground)
   //   F    goal flag (on ground)
   const LEVELS = [
     {
       name: "First Roll",
-      layout: "g3 S g5 w1 g4 p2 g3 e1 g4 s1 g4 w2 g4 p3 g3 r1 g4 F g5",
+      layout: "g3 S g2 t1 g2 w1 g4 p2 g3 e1 g4 s1 g4 w2 g4 p3 g3 r1 g4 F g5",
     },
     {
       name: "Spike Valley",
-      layout: "g2 S g4 s3 g3 e1 g3 w2 g2 s2 g3 p3 g3 d2 g3 w1 w2 p3 g3 p2 o2.2 p2 g3 e1 g2 s1 g1 s1 g3 r1 g3 F g5",
+      layout: "g2 S g2 t1 g1 s3 g3 e1 g3 w2 g2 s2 g3 p3 g3 d2 g3 w1 w2 p3 g3 p2 o2.2 p2 g3 e1 g2 s1 g1 s1 g3 r1 g3 F g5",
     },
     {
       name: "BOSS: King Blob",
-      layout: "g2 S g20 B1 g2",
+      layout: "g2 S g2 m1 g17 B1 g2",
     },
     {
       name: "Rolling Thunder",
-      layout: "g2 S g4 r1 g4 w2 s2 g3 p4 g2 e1 g3 s3 g2 d3 g2 p2 o1.1 p2 g2 W2 g1 s1 w2 g3 r1 g3 F g5",
+      layout: "g2 S g2 t1 g1 r1 g4 w2 s2 g3 p4 g2 e1 g3 s3 g2 d3 g2 p2 o1.1 p2 g2 W2 g1 s1 w2 g3 r1 g3 F g5",
     },
     {
       name: "The Gauntlet",
-      layout: "g2 S g4 e1 g3 p3 g2 s2 g1 s2 g3 d2 g3 p2 o2.2 p1 o2.2 p3 g2 r1 g3 w2 g3 e1 g2 s3 g3 d3 g2 W2 g3 F g5",
+      layout: "g2 S g2 m1 g1 e1 g3 p3 g2 s2 g1 s2 g3 d2 g3 p2 o2.2 p1 o2.2 p3 g2 r1 g3 w2 g3 e1 g2 s3 g3 d3 g2 W2 g3 F g5",
     },
     {
       name: "BOSS: Spike Lord",
-      layout: "g2 S g20 B2 g2",
+      layout: "g2 S g2 m1 g2 t1 g14 B2 g2",
     },
   ];
+
+  // Ball skins. c = [highlight, main, shadow] gradient colors.
+  const SKINS = [
+    { name: "Classic Red", c: ["#ff8a8a", "#e63946", "#9d0208"] },
+    { name: "Ocean Blue", c: ["#8ad8ff", "#2f80ed", "#0b3d91"] },
+    { name: "Lime", c: ["#d4ff8a", "#5cc93b", "#1e6b12"] },
+    { name: "Gold", c: ["#fff3b0", "#f5b700", "#8a5a00"], shine: true },
+    { name: "Soccer", c: ["#ffffff", "#f2f2f2", "#b8b8b8"], pattern: "soccer" },
+    { name: "Watermelon", c: ["#a8f08a", "#2e9e3e", "#145c1f"], pattern: "stripes" },
+    { name: "Ninja", c: ["#5a5a6e", "#2b2b3a", "#0e0e16"], extra: "headband" },
+    { name: "Rainbow", rainbow: true },
+  ];
+
+  function loadSkin() {
+    try {
+      const i = parseInt(localStorage.getItem("ballRunnerSkin"), 10);
+      return i >= 0 && i < SKINS.length ? i : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function setSkin(i) {
+    skinIndex = (i + SKINS.length) % SKINS.length;
+    try {
+      localStorage.setItem("ballRunnerSkin", String(skinIndex));
+    } catch {
+      // storage unavailable - skin just won't be remembered
+    }
+  }
 
   function buildLevel(def) {
     const cols = [];
     const spawns = [];
+    const pickups = [];
     let start = 0;
     let flag = -1;
     let boss = false;
@@ -120,6 +153,11 @@
           boss = true;
           ground(column());
           break;
+        case "t":
+        case "m":
+          pickups.push({ weapon: type === "t" ? "triple" : "bomb", col: cols.length });
+          ground(column());
+          break;
         case "S":
           start = cols.length;
           ground(column());
@@ -140,6 +178,7 @@
       name: def.name,
       grid,
       spawns,
+      pickups,
       boss,
       width: cols.length,
       startX: start * TILE + TILE / 2,
@@ -166,6 +205,11 @@
   let frame = 0;
   let shake = 0;
   let doubleJump = true; // toggled with D
+  let skinIndex = loadSkin(); // changed with S (or arrows on the title screen)
+  let shots = [];
+  let items = [];
+  let popups = [];
+  let fireCooldown = 0;
 
   function newPlayer() {
     return {
@@ -179,6 +223,9 @@
       coyote: 0,
       airJumps: 0,
       squash: 0,
+      weapon: "blaster",
+      ammo: Infinity,
+      recoil: 0,
     };
   }
 
@@ -186,11 +233,11 @@
     const x = s.col * TILE + TILE / 2;
     switch (s.type) {
       case "slime":
-        return { type: "slime", x, y: GROUND_ROW * TILE - 11, hw: 15, hh: 11, vx: -1.2, alive: true };
+        return { type: "slime", x, y: GROUND_ROW * TILE - 11, hw: 15, hh: 11, vx: -1.2, hp: 1, alive: true };
       case "roller":
-        return { type: "roller", x, y: GROUND_ROW * TILE - 16, r: 16, vx: 0, vy: 0, angle: 0, active: false, alive: true };
+        return { type: "roller", x, y: GROUND_ROW * TILE - 16, r: 16, vx: 0, vy: 0, angle: 0, active: false, hp: 3, alive: true };
       case "drone":
-        return { type: "drone", x, y: (GROUND_ROW - s.height) * TILE + TILE / 2, r: 13, active: false, alive: true, t: Math.random() * 6 };
+        return { type: "drone", x, y: (GROUND_ROW - s.height) * TILE + TILE / 2, r: 13, active: false, hp: 2, alive: true, t: Math.random() * 6 };
       case "boss": {
         const big = s.variant === 2;
         return {
@@ -200,8 +247,9 @@
           x, y: GROUND_ROW * TILE - 36,
           hw: 42, hh: 36,
           vx: 0, vy: 0,
-          hp: big ? 5 : 3,
-          maxHp: big ? 5 : 3,
+          // A stomp deals 10 damage, a bolt 1, a bomb 4
+          hp: big ? 50 : 30,
+          maxHp: big ? 50 : 30,
           timer: 90,
           invuln: 0,
           onGround: true,
@@ -221,6 +269,16 @@
     jumpBuffer = 0;
     levelTimer = 0;
     shake = 0;
+    shots = [];
+    popups = [];
+    fireCooldown = 0;
+    items = level.pickups.map((it) => ({
+      weapon: it.weapon,
+      x: it.col * TILE + TILE / 2,
+      y: (GROUND_ROW - 1) * TILE + 8,
+      t: Math.random() * 6,
+      alive: true,
+    }));
   }
 
   function startGame() {
@@ -242,7 +300,19 @@
 
     const k = e.key.toLowerCase();
     if (k === "d" && !e.repeat) doubleJump = !doubleJump;
+    if (k === "s" && !e.repeat) {
+      setSkin(skinIndex + 1);
+      if (state === "play") {
+        popups = popups.filter((pp) => !pp.skin);
+        popup(SKINS[skinIndex].name, player.x, player.y - 34, "#ffffff");
+        popups[popups.length - 1].skin = true;
+      }
+    }
 
+    if (state === "title" && !e.repeat) {
+      if (e.key === "ArrowLeft") setSkin(skinIndex - 1);
+      if (e.key === "ArrowRight") setSkin(skinIndex + 1);
+    }
     if (state === "title" || state === "win") {
       if (!e.repeat && (e.key === "Enter" || isJump)) startGame();
       return;
@@ -389,7 +459,7 @@
 
     if (p.onGround && !wasOnGround && fallSpeed > 4) {
       p.squash = Math.min(0.35, fallSpeed / 30);
-      puff(p.x, p.y + R, 5, "#d9c3ff");
+      puff(p.x, p.y + R, 5, "#ffffff");
     }
     p.squash *= 0.8;
 
@@ -494,7 +564,7 @@
       e.vx *= 0.8;
       e.timer--;
       if (e.timer <= 0) {
-        const rage = e.maxHp - e.hp;
+        const rage = (e.maxHp - e.hp) / 10;
         e.vy = e.variant === 2 ? -13 : -12;
         e.vx = (Math.sign(p.x - e.x) || 1) * (3 + rage * 0.6);
         e.timer = (e.variant === 2 ? 70 : 90) - rage * 8;
@@ -505,15 +575,15 @@
 
     if (e.onGround && !wasOnGround) {
       shake = 12;
-      puff(e.x - e.hw, e.y + e.hh, 8, "#d9c3ff");
-      puff(e.x + e.hw, e.y + e.hh, 8, "#d9c3ff");
+      puff(e.x - e.hw, e.y + e.hh, 8, "#ffffff");
+      puff(e.x + e.hw, e.y + e.hh, 8, "#ffffff");
       if (e.variant === 2) {
         // Spike Lord launches spiked wheels toward the ball when it lands
         const dir = Math.sign(p.x - e.x) || 1;
         enemies.push({
           type: "roller",
           x: e.x + dir * (e.hw + 20), y: e.y + e.hh - 16, r: 16,
-          vx: dir * 3, vy: -4, angle: 0, active: true, alive: true, temp: true, life: 300,
+          vx: dir * 3, vy: -4, angle: 0, active: true, hp: 3, alive: true, temp: true, life: 300,
         });
       }
     }
@@ -521,17 +591,12 @@
     if (!circleHitsRect(p.x, p.y, R, e.x - e.hw, e.y - e.hh, e.hw * 2, e.hh * 2)) return;
     const stomp = p.vy > 0 && p.y < e.y - e.hh + 8;
     if (stomp && e.invuln === 0) {
-      e.hp--;
       e.invuln = 60;
       shake = 16;
       player.vy = -12;
       player.airJumps = doubleJump ? 1 : 0;
       splat(p.x, p.y + R, e.variant === 2 ? "#ff4d6d" : "#b388ff");
-      if (e.hp <= 0) {
-        e.alive = false;
-        burst(e.x, e.y, 60);
-        levelDone(e.x, e.y);
-      }
+      damage(e, 10);
     } else if (e.invuln > 0) {
       // Freshly hit boss knocks the ball away instead of killing it
       player.vx = (Math.sign(p.x - e.x) || 1) * 6;
@@ -544,6 +609,7 @@
   function updateEnemies() {
     for (const e of enemies) {
       if (!e.alive || state !== "play") continue;
+      if (e.flash > 0) e.flash--;
       if (e.type === "slime") updateSlime(e);
       else if (e.type === "roller") updateRoller(e);
       else if (e.type === "drone") updateDrone(e);
@@ -576,6 +642,7 @@
 
     if (state === "play") {
       updatePlayer();
+      if (state === "play") updateWeapons();
       updateEnemies();
     } else if (state === "dead") {
       stateTimer++;
@@ -627,6 +694,124 @@
       pt.life--;
     }
     particles = particles.filter((pt) => pt.life > 0);
+
+    for (const pp of popups) {
+      pp.y -= 0.6;
+      pp.life--;
+    }
+    popups = popups.filter((pp) => pp.life > 0);
+  }
+
+  // ---------- Weapons ----------
+  const WEAPONS = {
+    blaster: { name: "Blaster", ammo: Infinity, cooldown: 14, color: "#ffd23f" },
+    triple: { name: "Triple Shot", ammo: 20, cooldown: 16, color: "#33b5ff" },
+    bomb: { name: "Bomb Launcher", ammo: 8, cooldown: 30, color: "#ff7b00" },
+  };
+
+  function fire() {
+    const p = player;
+    const w = WEAPONS[p.weapon];
+    const dir = p.facing;
+    const x = p.x + dir * (R + 6);
+    const y = p.y + 4;
+    if (p.weapon === "bomb") {
+      shots.push({ kind: "bomb", x, y, vx: dir * 6 + p.vx * 0.5, vy: -7, r: 7, life: 150 });
+    } else {
+      const spread = p.weapon === "triple" ? [-2, 0, 2] : [0];
+      for (const vy of spread) {
+        shots.push({ kind: "bolt", x, y, vx: dir * 10, vy, r: 5, dmg: 1, life: 70, color: w.color });
+      }
+    }
+    fireCooldown = w.cooldown;
+    p.recoil = 5;
+    if (p.ammo !== Infinity && --p.ammo <= 0) {
+      p.weapon = "blaster";
+      p.ammo = Infinity;
+      popup("Out of ammo!", p.x, p.y - 34, "#ff8c8c");
+    }
+  }
+
+  function enemyHit(e, x, y, r) {
+    if (e.type === "slime" || e.type === "boss") {
+      return circleHitsRect(x, y, r, e.x - e.hw, e.y - e.hh, e.hw * 2, e.hh * 2);
+    }
+    return circlesTouch(x, y, r, e.x, e.y, e.r);
+  }
+
+  function damage(e, amount) {
+    if (!e.alive) return;
+    e.hp -= amount;
+    e.flash = 6;
+    if (e.hp <= 0) killEnemy(e);
+  }
+
+  function killEnemy(e) {
+    e.alive = false;
+    if (e.type === "boss") {
+      burst(e.x, e.y, 60);
+      shake = 16;
+      levelDone(e.x, e.y);
+    } else {
+      const color = e.type === "slime" ? "#7bed9f" : e.type === "drone" ? "#c9a8ff" : "#b8b8d0";
+      splat(e.x, e.y, color);
+    }
+  }
+
+  function explode(x, y) {
+    shake = Math.max(shake, 8);
+    burst(x, y, 24);
+    for (const e of enemies) {
+      if (e.alive && enemyHit(e, x, y, 70)) damage(e, 4);
+    }
+  }
+
+  function updateWeapons() {
+    const p = player;
+    if (fireCooldown > 0) fireCooldown--;
+    if (p.recoil > 0) p.recoil--;
+    if ((keys["x"] || keys["X"] || keys["f"] || keys["F"]) && fireCooldown === 0) fire();
+
+    for (const sh of shots) {
+      sh.x += sh.vx;
+      sh.y += sh.vy;
+      if (sh.kind === "bomb") sh.vy += 0.35;
+      sh.life--;
+      let hit = sh.life <= 0 || sh.y > ROWS * TILE || isSolid(tileAt(Math.floor(sh.x / TILE), Math.floor(sh.y / TILE)));
+      if (!hit) {
+        for (const e of enemies) {
+          if (e.alive && enemyHit(e, sh.x, sh.y, sh.r)) {
+            if (sh.kind === "bolt") damage(e, sh.dmg);
+            hit = true;
+            break;
+          }
+        }
+      }
+      if (hit) {
+        sh.dead = true;
+        if (sh.kind === "bomb") explode(sh.x, sh.y);
+        else puff(sh.x, sh.y, 4, sh.color);
+      }
+    }
+    shots = shots.filter((sh) => !sh.dead);
+
+    // Weapon pickups
+    for (const it of items) {
+      it.t += 0.08;
+      if (!circlesTouch(p.x, p.y, R, it.x, it.y, 15)) continue;
+      const w = WEAPONS[it.weapon];
+      it.alive = false;
+      p.weapon = it.weapon;
+      p.ammo = w.ammo;
+      fireCooldown = 0;
+      popup(w.name + "!", it.x, it.y - 26, w.color);
+      puff(it.x, it.y, 10, w.color);
+    }
+    items = items.filter((it) => it.alive);
+  }
+
+  function popup(str, x, y, color) {
+    popups.push({ text: str, x, y, color, life: 60 });
   }
 
   // ---------- Particles ----------
@@ -709,46 +894,72 @@
     }
   }
 
-  // ---------- Background (animated sunset) ----------
-  const bokeh = Array.from({ length: 36 }, () => ({
+  // ---------- Background (animated daylight) ----------
+  const bokeh = Array.from({ length: 30 }, () => ({
     x: Math.random() * W,
     y: Math.random() * H,
-    r: 2 + Math.random() * 6,
-    s: 0.15 + Math.random() * 0.5,
+    r: 1.5 + Math.random() * 3,
+    s: 0.15 + Math.random() * 0.4,
     par: 0.05 + Math.random() * 0.3,
     ph: Math.random() * Math.PI * 2,
   }));
 
   const MOUNTAINS = [
-    { par: 0.1, base: 330, amp: 70, f1: 0.004, f2: 0.011, seed: 1, top: "#5a3a8a", bot: "#3a2566" },
-    { par: 0.25, base: 380, amp: 55, f1: 0.006, f2: 0.017, seed: 4, top: "#40296b", bot: "#28184a" },
-    { par: 0.45, base: 425, amp: 35, f1: 0.009, f2: 0.023, seed: 9, top: "#2a1a4d", bot: "#180e30" },
+    { par: 0.1, base: 330, amp: 70, f1: 0.004, f2: 0.011, seed: 1, top: "#a9c8e8", bot: "#d4e6f6" },
+    { par: 0.25, base: 380, amp: 55, f1: 0.006, f2: 0.017, seed: 4, top: "#7dbf93", bot: "#a9dcb6" },
+    { par: 0.45, base: 425, amp: 35, f1: 0.009, f2: 0.023, seed: 9, top: "#4fa86a", bot: "#74c788" },
   ];
 
   function drawBackground() {
     const t = frame / 60;
-    const hs = Math.sin(t * 0.08) * 18;
+    const hs = Math.sin(t * 0.08) * 6;
 
-    // Slowly shifting sky gradient
+    // Bright, gently shifting daytime sky
     const sky = ctx.createLinearGradient(0, 0, 0, H);
-    sky.addColorStop(0, `hsl(${250 + hs}, 60%, 16%)`);
-    sky.addColorStop(0.45, `hsl(${290 + hs}, 55%, 35%)`);
-    sky.addColorStop(0.8, `hsl(${340 + hs}, 75%, 58%)`);
-    sky.addColorStop(1, `hsl(${25 + hs}, 90%, 65%)`);
+    sky.addColorStop(0, `hsl(${205 + hs}, 85%, 58%)`);
+    sky.addColorStop(0.55, `hsl(${198 + hs}, 85%, 77%)`);
+    sky.addColorStop(1, `hsl(${45 + hs}, 95%, 88%)`);
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, W, H);
 
+    // Sun with slowly turning rays
+    const sx = W * 0.8 - camX * 0.03;
+    const sy = 90;
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(sx, sy);
+    ctx.rotate(t * 0.1);
+    ctx.fillStyle = "rgba(255, 248, 200, 0.22)";
+    for (let i = 0; i < 12; i++) {
+      ctx.rotate(Math.PI / 6);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-18, 260);
+      ctx.lineTo(18, 260);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+    const pulse = 1 + Math.sin(t * 1.5) * 0.05;
+    const halo = ctx.createRadialGradient(sx, sy, 30, sx, sy, 140 * pulse);
+    halo.addColorStop(0, "rgba(255, 250, 210, 0.8)");
+    halo.addColorStop(1, "rgba(255, 250, 210, 0)");
+    ctx.fillStyle = halo;
+    ctx.fillRect(sx - 160, sy - 160, 320, 320);
+    const core = ctx.createRadialGradient(sx - 10, sy - 10, 5, sx, sy, 44);
+    core.addColorStop(0, "#fffbe0");
+    core.addColorStop(1, "#ffd84d");
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 44, 0, Math.PI * 2);
+    ctx.fill();
 
-    // Aurora ribbons
-    for (let i = 0; i < 3; i++) {
-      const baseY = 60 + i * 35;
+    // Soft light ribbons drifting across the sky
+    for (let i = 0; i < 2; i++) {
+      const baseY = 150 + i * 55;
       const grad = ctx.createLinearGradient(0, baseY - 30, 0, baseY + 80);
-      const hue = 150 + i * 40 + hs;
-      grad.addColorStop(0, `hsla(${hue}, 90%, 60%, 0)`);
-      grad.addColorStop(0.4, `hsla(${hue}, 90%, 60%, 0.18)`);
-      grad.addColorStop(1, `hsla(${hue}, 90%, 60%, 0)`);
+      grad.addColorStop(0, "rgba(255, 255, 255, 0)");
+      grad.addColorStop(0.45, "rgba(255, 255, 255, 0.22)");
+      grad.addColorStop(1, "rgba(255, 255, 255, 0)");
       ctx.fillStyle = grad;
       ctx.beginPath();
       for (let x = 0; x <= W; x += 20) {
@@ -759,33 +970,22 @@
       }
       for (let x = W; x >= 0; x -= 20) {
         const wx = x + camX * 0.05;
-        const y = baseY + 70 + Math.sin(wx * 0.005 + t * 0.5 + i * 2.3) * 20;
-        ctx.lineTo(x, y);
+        ctx.lineTo(x, baseY + 70 + Math.sin(wx * 0.005 + t * 0.5 + i * 2.3) * 20);
       }
       ctx.closePath();
       ctx.fill();
     }
 
-    // Glowing sun with pulsing halo
-    const sx = W * 0.68 - camX * 0.03;
-    const sy = 300;
-    const pulse = 1 + Math.sin(t * 1.5) * 0.05;
-    const halo = ctx.createRadialGradient(sx, sy, 20, sx, sy, 220 * pulse);
-    halo.addColorStop(0, "rgba(255, 200, 120, 0.55)");
-    halo.addColorStop(1, "rgba(255, 80, 150, 0)");
-    ctx.fillStyle = halo;
-    ctx.fillRect(sx - 240, sy - 240, 480, 480);
-    ctx.restore();
+    // Drifting clouds
+    for (let i = 0; i < 6; i++) {
+      const span = W + 400;
+      const speed = 10 + (i % 3) * 6;
+      const par = 0.08 + (i % 3) * 0.04;
+      const x = ((((i * 230 + t * speed - camX * par) % span) + span) % span) - 200;
+      cloud(x, 50 + ((i * 53) % 140), 0.7 + (i % 3) * 0.25);
+    }
 
-    const core = ctx.createLinearGradient(0, sy - 80, 0, sy + 80);
-    core.addColorStop(0, "#fff3b0");
-    core.addColorStop(1, "#ff5e8a");
-    ctx.fillStyle = core;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 80, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Layered parallax mountains
+    // Layered parallax hills
     for (const m of MOUNTAINS) {
       const g = ctx.createLinearGradient(0, m.base - m.amp * 2, 0, H);
       g.addColorStop(0, m.top);
@@ -803,24 +1003,42 @@
       ctx.fill();
     }
 
-    // Floating glowing particles
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
+    // Floating sparkles
     for (const b of bokeh) {
       const x = (((b.x - camX * b.par) % W) + W) % W;
-      const a = 0.25 + Math.sin(t * 2 + b.ph) * 0.2;
-      ctx.fillStyle = `rgba(255, 210, 255, ${a})`;
+      const a = 0.4 + Math.sin(t * 2 + b.ph) * 0.25;
+      ctx.fillStyle = `rgba(255, 255, 255, ${a})`;
       ctx.beginPath();
       ctx.arc(x, b.y, b.r, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.restore();
+  }
+
+  function cloud(x, y, sc) {
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(x, y, 22 * sc, 0, Math.PI * 2);
+    ctx.arc(x + 26 * sc, y - 12 * sc, 28 * sc, 0, Math.PI * 2);
+    ctx.arc(x + 58 * sc, y, 22 * sc, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(x, y, 58 * sc, 22 * sc);
   }
 
   // ---------- Tiles ----------
   function drawTiles() {
     const c0 = Math.max(0, Math.floor(camX / TILE));
     const c1 = Math.min(level.width - 1, Math.ceil((camX + W) / TILE));
+
+    // Darken pits so they read as holes against the bright background
+    for (let c = c0; c <= c1; c++) {
+      if (level.grid[ROWS - 1][c] !== " ") continue;
+      const x = Math.round(c * TILE - camX);
+      const g = ctx.createLinearGradient(0, GROUND_ROW * TILE, 0, ROWS * TILE);
+      g.addColorStop(0, "#6b4a2e");
+      g.addColorStop(1, "#1e120a");
+      ctx.fillStyle = g;
+      ctx.fillRect(x, GROUND_ROW * TILE, TILE + 1, (ROWS - GROUND_ROW) * TILE);
+    }
     for (let r = 0; r < ROWS; r++) {
       for (let c = c0; c <= c1; c++) {
         const ch = level.grid[r][c];
@@ -836,23 +1054,23 @@
   }
 
   function drawGround(x, y, top) {
-    ctx.fillStyle = "#3b2a4a";
+    ctx.fillStyle = "#9a6a3c";
     ctx.fillRect(x, y, TILE, TILE);
-    ctx.fillStyle = "#33243f";
+    ctx.fillStyle = "#86592f";
     ctx.fillRect(x + 6, y + 18, 6, 6);
     ctx.fillRect(x + 24, y + 28, 6, 6);
     if (top) {
-      ctx.fillStyle = "#1fc98e";
+      ctx.fillStyle = "#4cc65a";
       ctx.fillRect(x, y, TILE, 10);
-      ctx.fillStyle = "#7fffd4";
+      ctx.fillStyle = "#9df29b";
       ctx.fillRect(x, y, TILE, 3);
     }
   }
 
   function drawWall(x, y) {
-    ctx.fillStyle = "#56607e";
+    ctx.fillStyle = "#9aa3b5";
     ctx.fillRect(x, y, TILE, TILE);
-    ctx.strokeStyle = "#3c4460";
+    ctx.strokeStyle = "#727c90";
     ctx.lineWidth = 2;
     ctx.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
     ctx.beginPath();
@@ -870,11 +1088,11 @@
   }
 
   function drawPlatform(x, y) {
-    ctx.fillStyle = "#7c5cff";
+    ctx.fillStyle = "#e9963e";
     ctx.fillRect(x, y, TILE, 14);
-    ctx.fillStyle = "#5438c9";
+    ctx.fillStyle = "#b86b1f";
     ctx.fillRect(x, y + 10, TILE, 4);
-    ctx.fillStyle = "#c3b5ff";
+    ctx.fillStyle = "#ffd29a";
     ctx.fillRect(x, y, TILE, 3);
   }
 
@@ -890,7 +1108,7 @@
       ctx.lineTo(sx + w - 2, y + TILE);
       ctx.closePath();
       ctx.fill();
-      ctx.fillStyle = "#9aa5b8";
+      ctx.fillStyle = "#6f7b90";
       ctx.beginPath();
       ctx.moveTo(sx + w / 2, y + 10);
       ctx.lineTo(sx + w - 2, y + TILE);
@@ -973,37 +1191,186 @@
     ctx.translate(x, p.y + R * (1 - sy));
     ctx.scale(sx, sy);
 
-    // Glow
-    ctx.fillStyle = "rgba(255, 60, 60, 0.18)";
-    ctx.beginPath();
-    ctx.arc(0, 0, R + 6, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Red rolling body
-    ctx.save();
-    ctx.rotate(p.angle);
-    const g = ctx.createRadialGradient(-4, -5, 2, 0, 0, R);
-    g.addColorStop(0, "#ff8a8a");
-    g.addColorStop(0.5, "#e63946");
-    g.addColorStop(1, "#9d0208");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(0, 0, R, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.35)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, R - 3, 2.2, 2.9);
-    ctx.stroke();
-    ctx.restore();
+    drawBallBody(p.angle, R, SKINS[skinIndex], p.facing);
 
     // Eyes stay upright and look where the ball is going
     const lookX = Math.max(-1, Math.min(1, p.vx / 3 || p.facing * 0.5));
     const lookY = Math.max(-1, Math.min(1, p.vy / 8));
     const blink = (frame + 90) % 180 < 7;
     drawEyes(p.facing * 2, -3, 5, lookX, lookY, blink, false);
+    drawGun(p.facing);
 
     ctx.restore();
+  }
+
+  function polygon(x, y, rad, n) {
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+      if (i === 0) ctx.moveTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad);
+      else ctx.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Draws a ball skin centered at the current origin (eyes are drawn separately).
+  function drawBallBody(angle, r, skin, facing) {
+    const hue = (frame * 3) % 360;
+    const c = skin.rainbow
+      ? [`hsl(${hue}, 100%, 80%)`, `hsl(${(hue + 60) % 360}, 90%, 55%)`, `hsl(${(hue + 120) % 360}, 80%, 38%)`]
+      : skin.c;
+
+    ctx.save();
+    ctx.rotate(angle);
+    const g = ctx.createRadialGradient(-r * 0.3, -r * 0.35, r * 0.15, 0, 0, r);
+    g.addColorStop(0, c[0]);
+    g.addColorStop(0.5, c[1]);
+    g.addColorStop(1, c[2]);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.clip();
+    if (skin.pattern === "soccer") {
+      ctx.fillStyle = "#1a1a2e";
+      polygon(0, 0, r * 0.32, 5);
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+        polygon(Math.cos(a) * r * 0.92, Math.sin(a) * r * 0.92, r * 0.3, 5);
+      }
+    } else if (skin.pattern === "stripes") {
+      ctx.strokeStyle = "#145c1f";
+      ctx.lineWidth = r * 0.16;
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * r * 0.42 - r * 0.12, -r);
+        ctx.quadraticCurveTo(i * r * 0.42 + r * 0.12, 0, i * r * 0.42 - r * 0.12, r);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+
+    // Small highlight that rolls with the ball
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = Math.max(2, r * 0.14);
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.78, 2.2, 2.9);
+    ctx.stroke();
+    ctx.restore();
+
+    if (skin.extra === "headband") {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = "#e63946";
+      ctx.fillRect(-r, -r * 0.45, r * 2, r * 0.55);
+      ctx.restore();
+      const wave = Math.sin(frame * 0.3) * r * 0.15;
+      ctx.fillStyle = "#e63946";
+      ctx.beginPath();
+      ctx.moveTo(-facing * r * 0.9, -r * 0.3);
+      ctx.lineTo(-facing * r * 1.6, -r * 0.5 + wave);
+      ctx.lineTo(-facing * r * 1.5, wave);
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (skin.shine) {
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.5 + Math.sin(frame * 0.15) * 0.4})`;
+      polygon(r * 0.45, -r * 0.5, r * 0.18, 4);
+    }
+  }
+
+  // Gun held at the side of the ball, in the ball's local coordinates
+  function drawGun(facing) {
+    const w = WEAPONS[player.weapon];
+    const kick = player.recoil * 0.8;
+    ctx.save();
+    ctx.scale(facing, 1);
+    ctx.fillStyle = "#2b2d42";
+    ctx.fillRect(R - 7 - kick, 4, 15, 6);
+    ctx.fillRect(R - 7 - kick, 8, 5, 6);
+    ctx.fillStyle = w.color;
+    ctx.fillRect(R + 5 - kick, 4, 4, 6);
+    ctx.restore();
+  }
+
+  function drawWeaponIcon(type, x, y) {
+    const w = WEAPONS[type];
+    if (type === "bomb") {
+      ctx.fillStyle = "#222";
+      ctx.beginPath();
+      ctx.arc(x, y + 2, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = frame % 10 < 5 ? "#ffd23f" : "#ff7b00";
+      ctx.beginPath();
+      ctx.arc(x + 5, y - 7, 3, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const dots = type === "triple" ? [[-5, -6], [3, 0], [-5, 6]] : [[0, 0]];
+      ctx.fillStyle = w.color;
+      for (const [dx, dy] of dots) {
+        ctx.beginPath();
+        ctx.arc(x + dx, y + dy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawItems() {
+    for (const it of items) {
+      const x = it.x - camX;
+      const y = it.y + Math.sin(it.t) * 4;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.strokeStyle = WEAPONS[it.weapon].color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.roundRect(x - 15, y - 15, 30, 30, 8);
+      ctx.fill();
+      ctx.stroke();
+      drawWeaponIcon(it.weapon, x, y);
+    }
+  }
+
+  function drawShots() {
+    for (const sh of shots) {
+      const x = sh.x - camX;
+      if (sh.kind === "bomb") {
+        ctx.fillStyle = "#222";
+        ctx.beginPath();
+        ctx.arc(x, sh.y, sh.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = frame % 6 < 3 ? "#ffd23f" : "#ff7b00";
+        ctx.beginPath();
+        ctx.arc(x + 3, sh.y - sh.r - 2, 3, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = sh.color;
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        ctx.ellipse(x - Math.sign(sh.vx) * 8, sh.y, 10, 3.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(x, sh.y, sh.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(x, sh.y, sh.r * 0.45, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawPopups() {
+    for (const pp of popups) {
+      ctx.globalAlpha = Math.min(1, pp.life / 20);
+      text(pp.text, pp.x - camX, pp.y, 18, pp.color);
+    }
+    ctx.globalAlpha = 1;
   }
 
   function drawSlime(e) {
@@ -1137,11 +1504,13 @@
   function drawEnemies() {
     for (const e of enemies) {
       if (e.x < camX - 120 || e.x > camX + W + 120) continue;
+      ctx.globalAlpha = e.flash > 0 ? 0.4 : 1;
       if (e.type === "slime") drawSlime(e);
       else if (e.type === "roller") drawRoller(e);
       else if (e.type === "drone") drawDrone(e);
       else if (e.type === "boss") drawBoss(e);
     }
+    ctx.globalAlpha = 1;
   }
 
   function drawParticles() {
@@ -1185,6 +1554,12 @@
     text(`Time ${formatTime(time)}`, W - 250, 32, 18, "#ffd23f", "left");
     text(`Deaths ${deaths}`, W - 24, 32, 18, "#ff8c8c", "right");
 
+    const w = WEAPONS[player.weapon];
+    panel(12, H - 52, 290, 40);
+    drawWeaponIcon(player.weapon, 34, H - 32);
+    text(`${w.name}  ${player.ammo === Infinity ? "∞" : player.ammo}`, 54, H - 32, 17, "#ffffff", "left");
+    text("X / F fire", 290, H - 32, 13, "#e8ecff", "right");
+
     const boss = enemies.find((e) => e.type === "boss");
     if (boss) {
       const bw = 300;
@@ -1215,21 +1590,27 @@
   function drawTitle() {
     drawBackground();
     overlay(0.35);
-    text("BALL RUNNER", W / 2, 120, 64, "#ff4d6d");
-    text("Roll, jump and reach the flag in all 6 levels!", W / 2, 185, 22, "#ffffff");
-    text("← → move   ↑ / Space jump (press again in the air to double jump)", W / 2, 222, 19, "#e8ecff");
-    text("R restart level   N skip level   B previous level   D double jump on/off", W / 2, 248, 17, "#e8ecff");
-    text("Stomp slimes · dodge spikes, pits, wheels and mines · bosses on levels 3 and 6", W / 2, 280, 18, "#e8ecff");
+    text("BALL RUNNER", W / 2, 80, 56, "#ff4d6d");
+    text("Roll, jump, shoot and reach the flag in all 6 levels!", W / 2, 130, 20, "#ffffff");
+    text("← → move    ↑ / Space jump (again in the air = double jump)    X / F shoot", W / 2, 170, 16, "#e8ecff");
+    text("R restart   N skip level   B previous level   D double jump on/off   S change skin", W / 2, 194, 15, "#e8ecff");
+    text("Grab weapons · stomp or shoot enemies · dodge spikes, pits, wheels and mines · bosses on 3 and 6", W / 2, 222, 15, "#e8ecff");
+
+    // Skin picker
+    const skin = SKINS[skinIndex];
+    ctx.save();
+    ctx.translate(W / 2, 295);
+    drawBallBody(frame * 0.03, 30, skin, 1);
+    drawEyes(2, -6, 9, Math.sin(frame * 0.03), 0, (frame + 90) % 180 < 7, false);
+    ctx.restore();
+    text("◀", W / 2 - 90, 295, 32, "#ffffff");
+    text("▶", W / 2 + 90, 295, 32, "#ffffff");
+    text(`Skin: ${skin.name} (${skinIndex + 1}/${SKINS.length})`, W / 2, 352, 22, "#ffd23f");
+    text("← → or S to change", W / 2, 378, 15, "#e8ecff");
+
     if (Math.floor(frame / 30) % 2 === 0) {
-      text("Press Space or Enter to start", W / 2, 335, 28, "#ffd23f");
+      text("Press Space or Enter to start", W / 2, 432, 26, "#ffd23f");
     }
-    // Bouncing demo ball with eyes
-    const by = 430 - Math.abs(Math.sin(frame * 0.06)) * 50;
-    ctx.fillStyle = "#e63946";
-    ctx.beginPath();
-    ctx.arc(W / 2, by, R + 4, 0, Math.PI * 2);
-    ctx.fill();
-    drawEyes(W / 2 + 3, by - 4, 5, Math.sin(frame * 0.03), 0, frame % 180 < 7, false);
   }
 
   function render() {
@@ -1240,9 +1621,12 @@
     ctx.save();
     if (shake > 0.5) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
     drawTiles();
+    drawItems();
     drawEnemies();
     drawPlayer();
+    drawShots();
     drawParticles();
+    drawPopups();
     ctx.restore();
 
     drawHUD();
