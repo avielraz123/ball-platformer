@@ -12,8 +12,10 @@ Add `?level=N` to the URL to jump straight to level N (for example `?level=3` fo
 
 ## Controls
 - **← →** move
-- **↑ / Space** jump (hold it longer to jump higher)
+- **↑ / Space** jump (hold it longer to jump higher, press again in the air to double jump)
 - **R** restart the current level
+- **N** skip to the next level, **B** go back a level
+- **D** turn double jump on/off
 
 ## Run it
 Open `index.html` in any browser, or play it online with GitHub Pages.

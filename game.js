@@ -165,6 +165,7 @@
   let particles = [];
   let frame = 0;
   let shake = 0;
+  let doubleJump = true; // toggled with D
 
   function newPlayer() {
     return {
@@ -176,6 +177,7 @@
       facing: 1,
       onGround: false,
       coyote: 0,
+      airJumps: 0,
       squash: 0,
     };
   }
@@ -238,13 +240,31 @@
     keys[e.key] = true;
     const isJump = e.key === "ArrowUp" || e.key === " ";
 
+    const k = e.key.toLowerCase();
+    if (k === "d" && !e.repeat) doubleJump = !doubleJump;
+
     if (state === "title" || state === "win") {
       if (!e.repeat && (e.key === "Enter" || isJump)) startGame();
       return;
     }
     if (isJump && !e.repeat) jumpBuffer = BUFFER_FRAMES;
-    if ((e.key === "r" || e.key === "R") && state === "play") die();
+    if (k === "r" && state === "play") die();
+    if (k === "n" && !e.repeat) skipLevel(1);
+    if (k === "b" && !e.repeat) skipLevel(-1);
   });
+
+  // Skip forward/back a level. Skipping past the last level ends the game.
+  function skipLevel(step) {
+    const next = levelIndex + step;
+    if (next < 0) return;
+    if (next >= LEVELS.length) {
+      state = "win";
+      stateTimer = 0;
+      return;
+    }
+    loadLevel(next);
+    state = "play";
+  }
 
   window.addEventListener("keyup", (e) => {
     keys[e.key] = false;
@@ -340,6 +360,8 @@
     if (p.onGround) p.coyote = COYOTE_FRAMES;
     else if (p.coyote > 0) p.coyote--;
 
+    if (p.onGround) p.airJumps = doubleJump ? 1 : 0;
+
     if (jumpBuffer > 0 && p.coyote > 0) {
       p.vy = JUMP_V;
       p.coyote = 0;
@@ -347,6 +369,13 @@
       p.onGround = false;
       p.squash = -0.25;
       puff(p.x, p.y + R, 6, "#ffffff");
+    } else if (jumpBuffer > 0 && p.airJumps > 0) {
+      // Double jump in mid-air
+      p.vy = JUMP_V * 0.9;
+      p.airJumps--;
+      jumpBuffer = 0;
+      p.squash = -0.25;
+      ring(p.x, p.y + R);
     }
 
     // Gravity, stronger when jump is released early (variable jump height)
@@ -388,6 +417,7 @@
     const jumpHeld = keys["ArrowUp"] || keys[" "];
     player.vy = jumpHeld ? -11 : -8;
     player.squash = -0.25;
+    player.airJumps = doubleJump ? 1 : 0;
   }
 
   function updateSlime(e) {
@@ -495,6 +525,7 @@
       e.invuln = 60;
       shake = 16;
       player.vy = -12;
+      player.airJumps = doubleJump ? 1 : 0;
       splat(p.x, p.y + R, e.variant === 2 ? "#ff4d6d" : "#b388ff");
       if (e.hp <= 0) {
         e.alive = false;
@@ -610,6 +641,22 @@
         max: 30,
         size: 3 + Math.random() * 3,
         color,
+      });
+    }
+  }
+
+  function ring(x, y) {
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * 3,
+        vy: Math.sin(a) * 1.2,
+        g: 0,
+        life: 18,
+        max: 18,
+        size: 4,
+        color: "#7fffd4",
       });
     }
   }
@@ -954,7 +1001,7 @@
     const lookX = Math.max(-1, Math.min(1, p.vx / 3 || p.facing * 0.5));
     const lookY = Math.max(-1, Math.min(1, p.vy / 8));
     const blink = (frame + 90) % 180 < 7;
-    drawEyes(p.facing * 3, -3, 4.2, lookX, lookY, blink, false);
+    drawEyes(p.facing * 2, -3, 5, lookX, lookY, blink, false);
 
     ctx.restore();
   }
@@ -1131,6 +1178,9 @@
   function drawHUD() {
     panel(12, 12, 360, 40);
     text(`Level ${levelIndex + 1}/${LEVELS.length}: ${level.name}`, 24, 32, 18, "#ffffff", "left");
+    panel(W - 262, 58, 250, 30);
+    text(`Double jump: ${doubleJump ? "ON" : "OFF"} (D)`, W - 250, 73, 14, doubleJump ? "#7fffd4" : "#aaaaaa", "left");
+    text("N skip ▸", W - 24, 73, 14, "#e8ecff", "right");
     panel(W - 262, 12, 250, 40);
     text(`Time ${formatTime(time)}`, W - 250, 32, 18, "#ffd23f", "left");
     text(`Deaths ${deaths}`, W - 24, 32, 18, "#ff8c8c", "right");
@@ -1167,10 +1217,11 @@
     overlay(0.35);
     text("BALL RUNNER", W / 2, 120, 64, "#ff4d6d");
     text("Roll, jump and reach the flag in all 6 levels!", W / 2, 185, 22, "#ffffff");
-    text("← → move     ↑ / Space jump     R restart level", W / 2, 230, 20, "#e8ecff");
-    text("Stomp slimes · dodge spikes, pits, wheels and mines · bosses on levels 3 and 6", W / 2, 268, 18, "#e8ecff");
+    text("← → move   ↑ / Space jump (press again in the air to double jump)", W / 2, 222, 19, "#e8ecff");
+    text("R restart level   N skip level   B previous level   D double jump on/off", W / 2, 248, 17, "#e8ecff");
+    text("Stomp slimes · dodge spikes, pits, wheels and mines · bosses on levels 3 and 6", W / 2, 280, 18, "#e8ecff");
     if (Math.floor(frame / 30) % 2 === 0) {
-      text("Press Space or Enter to start", W / 2, 340, 28, "#ffd23f");
+      text("Press Space or Enter to start", W / 2, 335, 28, "#ffd23f");
     }
     // Bouncing demo ball with eyes
     const by = 430 - Math.abs(Math.sin(frame * 0.06)) * 50;
